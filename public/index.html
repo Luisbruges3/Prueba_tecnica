@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Informe de Producción</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+</head>
+<body>
+
+<header class="topbar no-print">
+  <h1>📊 Generador de Informe de Producción</h1>
+  <p>Carga un archivo Excel o ingresa los datos de producción manualmente en las tablas.</p>
+</header>
+
+<!-- Panel de Selección de Modo -->
+<section class="upload-box no-print" id="uploadBox">
+  <div class="input-mode-selector">
+    <div>
+      <label><strong>Modo 1: Cargar desde Excel</strong></label><br/>
+      <input type="file" id="fileInput" accept=".xlsx,.xls" />
+      <button id="generarBtn">Cargar Excel</button>
+    </div>
+    <div style="margin-top: 15px;">
+      <label><strong>Modo 2: Captura Manual</strong></label><br/>
+      <button id="toggleManualBtn" style="background-color: #0284c7; color: white;">✏️ Ingresar Datos Manualmente</button>
+    </div>
+  </div>
+  <span id="status"></span>
+</section>
+
+<!-- SECCIÓN: TABLA INTERACTIVA DE INGRESO MANUAL (Inicia oculta con display: none) -->
+<section id="manualFormSection" class="upload-box no-print" style="display: none; text-align: left; background: #ffffff; border: 2px solid #0284c7; margin-top: 20px;">
+  <h2 style="color: #0284c7; margin-top: 0;">✏️ Tabla de Captura Manual de Datos</h2>
+  
+  <!-- 1. Lectura Ejecutiva -->
+  <div class="form-group" style="margin-bottom: 20px;">
+    <label><strong>Lectura / Resumen Ejecutivo:</strong></label><br/>
+    <textarea id="inputLectura" rows="3" style="width: 100%; padding: 8px;" placeholder="Escribe aquí las observaciones o resumen de la jornada de producción..."></textarea>
+  </div>
+
+  <!-- 2. Líneas OEE -->
+  <div class="form-group" style="margin-bottom: 20px;">
+    <h3>1. KPIs por Línea de Producción (OEE)</h3>
+    <table id="tableInputLineas" style="width: 100%; border-collapse: collapse; margin-bottom: 10px;">
+      <thead>
+        <tr style="background: #e2e8f0;">
+          <th style="padding: 6px; border: 1px solid #ccc;">Línea</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Cap. Utilizada (%)</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">OEE1 (%)</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">OEE2 (%)</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Acción</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Filas dinámicas -->
+      </tbody>
+    </table>
+    <button type="button" id="addRowLineaBtn">+ Agregar Línea</button>
+  </div>
+
+  <!-- 3. Top Desperdicio -->
+  <div class="form-group" style="margin-bottom: 20px;">
+    <h3>2. Top Desperdicio de Productos (PT)</h3>
+    <table id="tableInputTop" style="width: 100%; border-collapse: collapse; margin-bottom: 10px;">
+      <thead>
+        <tr style="background: #e2e8f0;">
+          <th style="padding: 6px; border: 1px solid #ccc;">Línea</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Código</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Descripción del Producto</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Desperdicio (kg)</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Desperdicio (%)</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Acción</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Filas dinámicas -->
+      </tbody>
+    </table>
+    <button type="button" id="addRowTopBtn">+ Agregar Producto</button>
+  </div>
+
+  <!-- 4. Metas de Cumplimiento -->
+  <div class="form-group" style="margin-bottom: 20px;">
+    <h3>3. Cumplimiento de Metas</h3>
+    <table id="tableInputMetas" style="width: 100%; border-collapse: collapse; margin-bottom: 10px;">
+      <thead>
+        <tr style="background: #e2e8f0;">
+          <th style="padding: 6px; border: 1px solid #ccc;">Indicador / KPI</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Actual</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Meta</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Estado</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Acción</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Filas dinámicas -->
+      </tbody>
+    </table>
+    <button type="button" id="addRowMetaBtn">+ Agregar Meta</button>
+  </div>
+
+  <!-- 5. Acciones Prioritarias -->
+  <div class="form-group" style="margin-bottom: 20px;">
+    <h3>4. Acciones Prioritarias</h3>
+    <table id="tableInputAcciones" style="width: 100%; border-collapse: collapse; margin-bottom: 10px;">
+      <thead>
+        <tr style="background: #e2e8f0;">
+          <th style="padding: 6px; border: 1px solid #ccc;">Área</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Acción a Realizar</th>
+          <th style="padding: 6px; border: 1px solid #ccc;">Acción</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Filas dinámicas -->
+      </tbody>
+    </table>
+    <button type="button" id="addRowAccionBtn">+ Agregar Acción</button>
+  </div>
+
+  <div style="text-align: center; margin-top: 20px;">
+    <button id="procesarManualBtn" style="background-color: #16a34a; color: white; padding: 10px 20px; font-size: 16px; border: none; border-radius: 5px; cursor: pointer;">
+      🚀 Generar Informe con estos Datos
+    </button>
+  </div>
+</section>
+
+<!-- REPORTE GENERADO -->
+<main id="report" class="report hidden">
+
+  <div class="report-header">
+    <h2>Informe Ejecutivo de Producción</h2>
+    <p id="fecha"></p>
+    
+    <div class="no-print" style="margin: 10px 0;">
+      <label for="filtroLinea"><strong>Filtrar por Línea: </strong></label>
+      <select id="filtroLinea">
+        <option value="TODAS">-- Todas las Líneas --</option>
+      </select>
+    </div>
+
+    <button id="printBtn" class="no-print">⬇️ Descargar / Imprimir PDF</button>
+  </div>
+
+  <section id="lecturaSection">
+    <h3>Lectura ejecutiva</h3>
+    <p id="lecturaTexto"></p>
+  </section>
+
+  <section>
+    <h3>Cumplimiento de metas</h3>
+    <table id="tablaCumplimiento">
+      <thead>
+        <tr><th>Indicador</th><th>Actual</th><th>Meta</th><th>Estado</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h3>OEE2 y capacidad utilizada por línea</h3>
+    <div class="chart-wrap">
+      <canvas id="chartLineas"></canvas>
+    </div>
+    <table id="tablaLineas">
+      <thead>
+        <tr><th>Línea</th><th>Capacidad Utilizada</th><th>OEE1</th><th>OEE2</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h3>Top productos con mayor desperdicio (kg)</h3>
+    <div class="chart-wrap">
+      <canvas id="chartDesperdicio"></canvas>
+    </div>
+    <table id="tablaTop">
+      <thead>
+        <tr><th>#</th><th>Línea</th><th>Código</th><th>Producto</th><th>Desperdicio (kg)</th><th>Desperdicio (%)</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h3>Desperdicio total por línea</h3>
+    <div class="chart-wrap small" style="max-width: 400px; margin: 0 auto;">
+      <canvas id="chartPorLinea"></canvas>
+    </div>
+  </section>
+
+  <section id="accionesSection">
+    <h3>Acciones prioritarias</h3>
+    <ol id="listaAcciones"></ol>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
