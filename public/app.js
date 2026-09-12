@@ -48,28 +48,37 @@ function cleanReportData(report) {
   if (!report) return report;
 
   const esIgnorable = (txt) => {
-    if (!txt) return true;
+    if (!txt) return false;
     const norm = String(txt).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
     return ['total', 'totales', 'promedio', 'subtotal', 'linea de produccion', 'gran total', 'resumen'].includes(norm) || norm.startsWith('total');
   };
 
-  // Filtrar líneas duplicadas o con nombre de total
+  // 1. Filtrar líneas OEE duplicadas o que sean fila de totales
   const kpisPorLinea = (report.kpisPorLinea || []).filter((item, idx, self) => {
     if (!item || !item.linea || esIgnorable(item.linea)) return false;
     return self.findIndex(t => String(t.linea).trim().toLowerCase() === String(item.linea).trim().toLowerCase()) === idx;
   });
 
-  // Filtrar productos duplicados o inválidos
+  // 2. Filtrar productos duplicados o que sean filas de encabezado/totales
   const topDesperdicio = (report.topDesperdicio || []).filter((item, idx, self) => {
     const nombre = item.descripcion || item.producto || item.codigo;
     if (!nombre || esIgnorable(nombre) || esIgnorable(item.linea)) return false;
-    return self.findIndex(t => (String(t.linea) + String(t.codigo) + String(t.descripcion)).toLowerCase() === (String(item.linea) + String(item.codigo) + String(item.descripcion)).toLowerCase()) === idx;
+    return self.findIndex(t => (String(t.linea) + String(t.codigo) + String(nombre)).toLowerCase() === (String(item.linea) + String(item.codigo) + String(t.descripcion || t.producto)).toLowerCase()) === idx;
+  });
+
+  // 3. Recalcular el desperdicio acumulado por línea para el gráfico circular
+  const desperdicioPorLinea = {};
+  topDesperdicio.forEach(p => {
+    const l = p.linea || 'General';
+    const kg = parseNum(p.desperdicioKg) || 0;
+    desperdicioPorLinea[l] = (desperdicioPorLinea[l] || 0) + kg;
   });
 
   return {
     ...report,
     kpisPorLinea,
-    topDesperdicio
+    topDesperdicio,
+    desperdicioPorLinea
   };
 }
 
@@ -235,43 +244,80 @@ function uploadFile() {
       const topDesperdicio = [];
       const cumplimiento = [];
       const acciones = [];
-      const desperdicioPorLinea = {};
+
+      const norm = (str) => String(str || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
       workbook.SheetNames.forEach(sheetName => {
         const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
 
         rows.forEach(r => {
-          // Extraer claves sin importar mayúsculas/tildes
           const keys = Object.keys(r);
+
+          // Helper para buscar cualquier columna que coincida parcialmente con palabras clave
           const getVal = (candidatos) => {
-            const key = keys.find(k => candidatos.some(c => k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(c)));
-            return key ? r[key] : '';
+            const matchedKey = keys.find(k => {
+              const nk = norm(k);
+              return candidatos.some(c => nk.includes(c));
+            });
+            return matchedKey ? r[matchedKey] : '';
           };
 
-          const linea = getVal(['linea', 'proceso']);
-          const cap = parseNum(getVal(['capacidad', 'utilizacion']));
+          // 1. Líneas OEE
+          const linea = getVal(['linea', 'proceso', 'equipo', 'planta']);
+          const cap = parseNum(getVal(['capacidad', 'utilizacion', 'cap_utilizada']));
           const oee1 = parseNum(getVal(['oee1', 'oee 1']));
           const oee2 = parseNum(getVal(['oee2', 'oee 2']));
 
-          if (linea && (cap !== null || oee2 !== null)) {
-            kpisPorLinea.push({ linea: String(linea).trim(), capacidadUtilizada: cap, oee1, oee2 });
+          if (linea && (cap !== null || oee1 !== null || oee2 !== null)) {
+            kpisPorLinea.push({
+              linea: String(linea).trim(),
+              capacidadUtilizada: cap,
+              oee1: oee1,
+              oee2: oee2
+            });
           }
 
-          const prod = getVal(['producto', 'descripcion', 'articulo']);
-          const cod = getVal(['codigo', 'sku', 'ref']);
-          const kg = parseNum(getVal(['desperdicio kg', 'kg desperdicio', 'desperdicio']));
-          const pct = parseNum(getVal(['desperdicio %', '% desperdicio']));
+          // 2. Top Desperdicio
+          const prod = getVal(['producto', 'descripcion', 'articulo', 'item', 'nombre']);
+          const cod = getVal(['codigo', 'sku', 'ref', 'cod']);
+          const kg = parseNum(getVal(['desperdicio', 'kg', 'merma', 'scrap', 'perdida']));
+          const pct = parseNum(['pct', 'porcentaje', '%']);
 
-          if (prod && kg !== null) {
-            const lNom = linea ? String(linea).trim() : 'General';
+          if (prod && kg !== null && kg > 0) {
             topDesperdicio.push({
-              linea: lNom,
+              linea: linea ? String(linea).trim() : 'General',
               codigo: cod ? String(cod).trim() : 'S/C',
               descripcion: String(prod).trim(),
+              producto: String(prod).trim(),
               desperdicioKg: kg,
               desperdicioPct: pct
             });
-            desperdicioPorLinea[lNom] = (desperdicioPorLinea[lNom] || 0) + kg;
+          }
+
+          // 3. Metas / Cumplimiento
+          const kpiNom = getVal(['indicador', 'kpi', 'metrica', 'meta']);
+          const valActual = getVal(['actual', 'real', 'ejecutado']);
+          const valMeta = getVal(['meta', 'objetivo', 'target']);
+          const valEstado = getVal(['estado', 'cumplimiento', 'status']);
+
+          if (kpiNom && (valActual !== '' || valMeta !== '' || valEstado !== '')) {
+            cumplimiento.push({
+              kpi: String(kpiNom).trim(),
+              actual: valActual !== '' ? valActual : '-',
+              meta: valMeta !== '' ? valMeta : '-',
+              estado: valEstado !== '' ? valEstado : 'Pendiente'
+            });
+          }
+
+          // 4. Acciones Prioritarias
+          const accionTexto = getVal(['accion', 'tarea', 'actividad', 'recomendacion']);
+          const areaTexto = getVal(['area', 'departamento', 'responsable']);
+
+          if (accionTexto && String(accionTexto).trim() !== '') {
+            acciones.push({
+              area: areaTexto ? String(areaTexto).trim() : 'General',
+              accion: String(accionTexto).trim()
+            });
           }
         });
       });
@@ -283,7 +329,6 @@ function uploadFile() {
         cumplimiento,
         kpisPorLinea,
         topDesperdicio,
-        desperdicioPorLinea,
         acciones
       });
 
