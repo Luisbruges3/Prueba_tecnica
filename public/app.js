@@ -215,27 +215,89 @@ function procesarDatosManuales() {
 }
 
 // ---------- 4. Cargar desde Archivo Excel ----------
-async function uploadFile() {
+function uploadFile() {
   const fileInput = document.getElementById('fileInput');
   const status = document.getElementById('status');
-  if (!fileInput.files.length) return alert('Selecciona un archivo Excel');
+  const file = fileInput?.files[0];
 
-  const formData = new FormData();
-  formData.append('excel', fileInput.files[0]);
+  if (!file) return alert('Selecciona un archivo Excel');
+
   status.innerText = 'Procesando Excel...';
 
-  try {
-    const res = await fetch('/api/upload', { method: 'POST', body: formData });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error);
+  const reader = new FileReader();
 
-    globalReport = cleanReportData(data.report);
-    status.innerText = '✅ Informe generado desde Excel';
-    poblarFiltroLineas(globalReport.kpisPorLinea);
-    renderReport(globalReport);
-  } catch (err) {
-    status.innerText = '❌ Error: ' + err.message;
-  }
+  reader.onload = function (e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+
+      const kpisPorLinea = [];
+      const topDesperdicio = [];
+      const cumplimiento = [];
+      const acciones = [];
+      const desperdicioPorLinea = {};
+
+      workbook.SheetNames.forEach(sheetName => {
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+
+        rows.forEach(r => {
+          // Extraer claves sin importar mayúsculas/tildes
+          const keys = Object.keys(r);
+          const getVal = (candidatos) => {
+            const key = keys.find(k => candidatos.some(c => k.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").includes(c)));
+            return key ? r[key] : '';
+          };
+
+          const linea = getVal(['linea', 'proceso']);
+          const cap = parseNum(getVal(['capacidad', 'utilizacion']));
+          const oee1 = parseNum(getVal(['oee1', 'oee 1']));
+          const oee2 = parseNum(getVal(['oee2', 'oee 2']));
+
+          if (linea && (cap !== null || oee2 !== null)) {
+            kpisPorLinea.push({ linea: String(linea).trim(), capacidadUtilizada: cap, oee1, oee2 });
+          }
+
+          const prod = getVal(['producto', 'descripcion', 'articulo']);
+          const cod = getVal(['codigo', 'sku', 'ref']);
+          const kg = parseNum(getVal(['desperdicio kg', 'kg desperdicio', 'desperdicio']));
+          const pct = parseNum(getVal(['desperdicio %', '% desperdicio']));
+
+          if (prod && kg !== null) {
+            const lNom = linea ? String(linea).trim() : 'General';
+            topDesperdicio.push({
+              linea: lNom,
+              codigo: cod ? String(cod).trim() : 'S/C',
+              descripcion: String(prod).trim(),
+              desperdicioKg: kg,
+              desperdicioPct: pct
+            });
+            desperdicioPorLinea[lNom] = (desperdicioPorLinea[lNom] || 0) + kg;
+          }
+        });
+      });
+
+      globalReport = cleanReportData({
+        generadoEn: new Date().toISOString(),
+        modo: 'excel-client',
+        lecturaEjecutiva: 'Informe procesado localmente desde archivo Excel.',
+        cumplimiento,
+        kpisPorLinea,
+        topDesperdicio,
+        desperdicioPorLinea,
+        acciones
+      });
+
+      status.innerText = '✅ Informe generado desde Excel';
+      poblarFiltroLineas(globalReport.kpisPorLinea);
+      renderReport(globalReport);
+
+    } catch (err) {
+      console.error(err);
+      status.innerText = '❌ Error al leer el Excel en el navegador.';
+    }
+  };
+
+  reader.readAsArrayBuffer(file);
 }
 
 // ---------- 5. Renderizar Filtros y Reporte Final ----------
