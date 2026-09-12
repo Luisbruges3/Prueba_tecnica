@@ -1,54 +1,130 @@
-let globalReport = null;
-let chartInstanceLineas = null;
-let chartInstanceDesperdicio = null;
-let chartInstancePorLinea = null;
+// Variable global para almacenar los datos activos del informe
+let datosInformeActual = null;
 
-// Listeners de Eventos
-document.getElementById('generarBtn').addEventListener('click', uploadFile);
-document.getElementById('toggleManualBtn').addEventListener('click', toggleManualForm);
-document.getElementById('procesarManualBtn').addEventListener('click', procesarDatosManuales);
-document.getElementById('filtroLinea').addEventListener('change', aplicarFiltroLinea);
-document.getElementById('printBtn').addEventListener('click', () => window.print());
+// Instancias globales de gráficos para destruirlos antes de volver a renderizar
+let chartLineasInstance = null;
+let chartDesperdicioInstance = null;
+let chartPorLineaInstance = null;
 
-// Buttons para agregar filas a la tabla manual
-document.getElementById('addRowLineaBtn').addEventListener('click', () => addRowLinea());
-document.getElementById('addRowTopBtn').addEventListener('click', () => addRowTop());
-document.getElementById('addRowMetaBtn').addEventListener('click', () => addRowMeta());
-document.getElementById('addRowAccionBtn').addEventListener('click', () => addRowAccion());
+document.addEventListener('DOMContentLoaded', () => {
+  // Inicializar eventos principales
+  document.getElementById('generarBtn').addEventListener('click', cargarExcel);
+  document.getElementById('toggleManualBtn').addEventListener('click', toggleManualForm);
+  document.getElementById('procesarManualBtn').addEventListener('click', procesarFormularioManual);
+  document.getElementById('printBtn').addEventListener('click', () => window.print());
+  document.getElementById('filtroLinea').addEventListener('change', aplicarFiltroLinea);
 
-// ---------- Helpers de Formateo ----------
-function formatPct(v) {
-  if (v === null || v === undefined || v === '') return '-';
-  if (typeof v === 'string') return v.includes('%') ? v : v + '%';
-  if (typeof v === 'number') {
-    const val = v <= 1 ? v * 100 : v;
-    return val.toFixed(1) + '%';
+  // Eventos para agregar filas a las tablas de captura manual
+  document.getElementById('addRowLineaBtn').addEventListener('click', () => addRowLinea());
+  document.getElementById('addRowTopBtn').addEventListener('click', () => addRowTop());
+  document.getElementById('addRowMetaBtn').addEventListener('click', () => addRowMeta());
+  document.getElementById('addRowAccionBtn').addEventListener('click', () => addRowAccion());
+});
+
+// ==========================================
+// 1. CARGA Y PROCESAMIENTO DE EXCEL (SheetJS)
+// ==========================================
+function cargarExcel() {
+  const fileInput = document.getElementById('fileInput');
+  const statusSpan = document.getElementById('status');
+  const file = fileInput.files[0];
+
+  if (!file) {
+    alert('Por favor selecciona un archivo Excel (.xlsx o .xls)');
+    return;
   }
-  return String(v);
+
+  statusSpan.textContent = ' ⏳ Leyendo archivo...';
+
+  const reader = new FileReader();
+
+  reader.onload = function (e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+
+      // Estructura base para el reporte
+      const datosEstructurados = {
+        lectura: "Informe cargado exitosamente desde archivo Excel.",
+        lineas: [],
+        topDesperdicio: [],
+        metas: [],
+        acciones: []
+      };
+
+      // Si el Excel tiene hojas específicas, las leemos; de lo contrario, leemos la primera hoja
+      const sheetNames = workbook.SheetNames;
+
+      sheetNames.forEach(sheetName => {
+        const worksheet = workbook.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(worksheet);
+
+        const nombreNormalizado = sheetName.toLowerCase();
+
+        if (nombreNormalizado.includes('linea') || nombreNormalizado.includes('oee')) {
+          datosEstructurados.lineas = rows.map(r => ({
+            linea: r.Linea || r.Línea || r.linea || 'Línea Sin Nombre',
+            capUtilizada: parseFloat(r.CapUtilizada || r['Cap. Utilizada (%)'] || r.capUtilizada || 0),
+            oee1: parseFloat(r.OEE1 || r['OEE1 (%)'] || r.oee1 || 0),
+            oee2: parseFloat(r.OEE2 || r['OEE2 (%)'] || r.oee2 || 0)
+          }));
+        } else if (nombreNormalizado.includes('desperdicio') || nombreNormalizado.includes('top')) {
+          datosEstructurados.topDesperdicio = rows.map(r => ({
+            linea: r.Linea || r.Línea || r.linea || 'General',
+            codigo: r.Codigo || r.Código || r.codigo || 'S/C',
+            producto: r.Producto || r.Descripción || r.producto || 'Producto',
+            desperdicioKg: parseFloat(r.DesperdicioKg || r['Desperdicio (kg)'] || r.desperdicioKg || 0),
+            desperdicioPct: parseFloat(r.DesperdicioPct || r['Desperdicio (%)'] || r.desperdicioPct || 0)
+          }));
+        } else if (nombreNormalizado.includes('meta') || nombreNormalizado.includes('kpi')) {
+          datosEstructurados.metas = rows.map(r => ({
+            indicador: r.Indicador || r.KPI || r.indicador || 'KPI',
+            actual: r.Actual || r.actual || '0',
+            meta: r.Meta || r.meta || '0',
+            estado: r.Estado || r.estado || 'Pendiente'
+          }));
+        } else if (nombreNormalizado.includes('accion')) {
+          datosEstructurados.acciones = rows.map(r => ({
+            area: r.Area || r.Área || r.area || 'General',
+            accion: r.Accion || r.Acción || r.accion || ''
+          }));
+        }
+      });
+
+      // Si fue una sola hoja plana, intentamos extraer los datos directamente
+      if (datosEstructurados.lineas.length === 0 && sheetNames.length > 0) {
+        const firstSheet = XLSX.utils.sheet_to_json(workbook.Sheets[sheetNames[0]]);
+        datosEstructurados.lineas = firstSheet.map(r => ({
+          linea: r.Linea || r.Línea || 'Línea',
+          capUtilizada: parseFloat(r.CapUtilizada || r['Cap. Utilizada (%)'] || 0),
+          oee1: parseFloat(r.OEE1 || 0),
+          oee2: parseFloat(r.OEE2 || 0)
+        }));
+      }
+
+      statusSpan.textContent = ' ✅ ¡Archivo procesado!';
+      renderizarReporte(datosEstructurados);
+
+    } catch (err) {
+      console.error(err);
+      statusSpan.textContent = ' ❌ Error al leer el archivo Excel.';
+      alert('Ocurrió un error al procesar el archivo Excel. Asegúrate de que tenga un formato válido.');
+    }
+  };
+
+  reader.readAsArrayBuffer(file);
 }
 
-function formatVal(v) {
-  if (v === null || v === undefined || v === '') return '-';
-  if (typeof v === 'number') return v.toLocaleString();
-  return String(v);
-}
-
-function parseNum(v) {
-  if (!v || v.trim() === '') return null;
-  const n = parseFloat(v.replace(',', '.').replace('%', ''));
-  return isNaN(n) ? null : n;
-}
-
-// ---------- 1. Mostrar / Ocultar Formulario Manual ----------
-// ---------- Mostrar / Ocultar Formulario Manual al hacer clic ----------
+// ==========================================
+// 2. LOGICA DE FORMULARIO DE CAPTURA MANUAL
+// ==========================================
 function toggleManualForm() {
   const form = document.getElementById('manualFormSection');
   
-  // Si está oculto, lo mostramos; si está visible, lo ocultamos
   if (form.style.display === 'none' || form.style.display === '') {
     form.style.display = 'block';
 
-    // Si la tabla de líneas está vacía, agregamos unas filas iniciales de guía
+    // Precargar filas iniciales de guía si está vacía
     if (document.querySelectorAll('#tableInputLineas tbody tr').length === 0) {
       addRowLinea('Línea 1 - Pan Tajado', 85, 78, 74);
       addRowLinea('Línea 2 - Hamburgo', 78, 72, 69);
@@ -61,43 +137,48 @@ function toggleManualForm() {
   }
 }
 
-// ---------- 2. Constructores de Filas Editables ----------
-function addRowLinea(linea = '', cap = '', oee1 = '', oee2 = '') {
+function addRowLinea(linea = '', cap = 0, oee1 = 0, oee2 = 0) {
   const tbody = document.querySelector('#tableInputLineas tbody');
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input type="text" class="in-linea" value="${linea}" placeholder="Ej. Línea 1" style="width: 95%;"></td>
-    <td><input type="number" class="in-cap" value="${cap}" placeholder="85" style="width: 90%;"></td>
-    <td><input type="number" class="in-oee1" value="${oee1}" placeholder="78" style="width: 90%;"></td>
-    <td><input type="number" class="in-oee2" value="${oee2}" placeholder="74" style="width: 90%;"></td>
-    <td style="text-align:center;"><button type="button" onclick="this.closest('tr').remove()" style="color:red;">❌</button></td>
+    <td><input type="text" value="${linea}" placeholder="Nombre línea" style="width:95%"></td>
+    <td><input type="number" value="${cap}" style="width:90%"></td>
+    <td><input type="number" value="${oee1}" style="width:90%"></td>
+    <td><input type="number" value="${oee2}" style="width:90%"></td>
+    <td><button onclick="this.closest('tr').remove()" style="color:red; cursor:pointer;">X</button></td>
   `;
   tbody.appendChild(tr);
 }
 
-function addRowTop(linea = '', codigo = '', desc = '', kg = '', pct = '') {
+function addRowTop(linea = '', codigo = '', producto = '', kg = 0, pct = 0) {
   const tbody = document.querySelector('#tableInputTop tbody');
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input type="text" class="in-top-linea" value="${linea}" placeholder="Ej. Línea 1" style="width: 95%;"></td>
-    <td><input type="text" class="in-top-codigo" value="${codigo}" placeholder="Ej. P001" style="width: 90%;"></td>
-    <td><input type="text" class="in-top-desc" value="${desc}" placeholder="Ej. Pan Blanco 500g" style="width: 95%;"></td>
-    <td><input type="number" class="in-top-kg" value="${kg}" placeholder="120" style="width: 90%;"></td>
-    <td><input type="number" class="in-top-pct" value="${pct}" placeholder="3.5" style="width: 90%;"></td>
-    <td style="text-align:center;"><button type="button" onclick="this.closest('tr').remove()" style="color:red;">❌</button></td>
+    <td><input type="text" value="${linea}" placeholder="Línea" style="width:95%"></td>
+    <td><input type="text" value="${codigo}" placeholder="Código" style="width:95%"></td>
+    <td><input type="text" value="${producto}" placeholder="Nombre producto" style="width:95%"></td>
+    <td><input type="number" value="${kg}" style="width:90%"></td>
+    <td><input type="number" value="${pct}" step="0.1" style="width:90%"></td>
+    <td><button onclick="this.closest('tr').remove()" style="color:red; cursor:pointer;">X</button></td>
   `;
   tbody.appendChild(tr);
 }
 
-function addRowMeta(kpi = '', actual = '', meta = '', estado = '') {
+function addRowMeta(kpi = '', actual = '', meta = '', estado = 'Cumple') {
   const tbody = document.querySelector('#tableInputMetas tbody');
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input type="text" class="in-meta-kpi" value="${kpi}" placeholder="Ej. OEE Global" style="width: 95%;"></td>
-    <td><input type="text" class="in-meta-actual" value="${actual}" placeholder="72.5%" style="width: 90%;"></td>
-    <td><input type="text" class="in-meta-meta" value="${meta}" placeholder="75%" style="width: 90%;"></td>
-    <td><input type="text" class="in-meta-estado" value="${estado}" placeholder="Cumple / No Cumple" style="width: 90%;"></td>
-    <td style="text-align:center;"><button type="button" onclick="this.closest('tr').remove()" style="color:red;">❌</button></td>
+    <td><input type="text" value="${kpi}" placeholder="KPI" style="width:95%"></td>
+    <td><input type="text" value="${actual}" placeholder="Actual" style="width:95%"></td>
+    <td><input type="text" value="${meta}" placeholder="Meta" style="width:95%"></td>
+    <td>
+      <select style="width:95%">
+        <option value="Cumple" ${estado === 'Cumple' ? 'selected' : ''}>Cumple</option>
+        <option value="No Cumple" ${estado === 'No Cumple' ? 'selected' : ''}>No Cumple</option>
+        <option value="En Riesgo" ${estado === 'En Riesgo' ? 'selected' : ''}>En Riesgo</option>
+      </select>
+    </td>
+    <td><button onclick="this.closest('tr').remove()" style="color:red; cursor:pointer;">X</button></td>
   `;
   tbody.appendChild(tr);
 }
@@ -106,269 +187,233 @@ function addRowAccion(area = '', accion = '') {
   const tbody = document.querySelector('#tableInputAcciones tbody');
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input type="text" class="in-acc-area" value="${area}" placeholder="Ej. Mantenimiento" style="width: 95%;"></td>
-    <td><input type="text" class="in-acc-accion" value="${accion}" placeholder="Ej. Ajustar sensores..." style="width: 95%;"></td>
-    <td style="text-align:center;"><button type="button" onclick="this.closest('tr').remove()" style="color:red;">❌</button></td>
+    <td><input type="text" value="${area}" placeholder="Área" style="width:95%"></td>
+    <td><input type="text" value="${accion}" placeholder="Acción a tomar" style="width:95%"></td>
+    <td><button onclick="this.closest('tr').remove()" style="color:red; cursor:pointer;">X</button></td>
   `;
   tbody.appendChild(tr);
 }
 
-// ---------- 3. Recopilar Datos Tipeados por el Usuario ----------
-function procesarDatosManuales() {
-  const lecturaEjecutiva = document.getElementById('inputLectura').value.trim();
+function procesarFormularioManual() {
+  const lectura = document.getElementById('inputLectura').value || "Resumen de jornada ingresado manualmente.";
 
-  // Lectura de Líneas OEE
-  const kpisPorLinea = [];
-  document.querySelectorAll('#tableInputLineas tbody tr').forEach((tr) => {
-    const linea = tr.querySelector('.in-linea').value.trim();
-    if (!linea) return;
-    kpisPorLinea.push({
-      linea,
-      capacidadUtilizada: parseNum(tr.querySelector('.in-cap').value),
-      oee1: parseNum(tr.querySelector('.in-oee1').value),
-      oee2: parseNum(tr.querySelector('.in-oee2').value),
-    });
+  const lineas = Array.from(document.querySelectorAll('#tableInputLineas tbody tr')).map(tr => {
+    const inputs = tr.querySelectorAll('input');
+    return {
+      linea: inputs[0].value || 'Línea',
+      capUtilizada: parseFloat(inputs[1].value) || 0,
+      oee1: parseFloat(inputs[2].value) || 0,
+      oee2: parseFloat(inputs[3].value) || 0
+    };
   });
 
-  // Lectura de Productos Top Desperdicio
-  const topDesperdicio = [];
-  const desperdicioPorLinea = {};
-  document.querySelectorAll('#tableInputTop tbody tr').forEach((tr) => {
-    const linea = tr.querySelector('.in-top-linea').value.trim();
-    const codigo = tr.querySelector('.in-top-codigo').value.trim();
-    const descripcion = tr.querySelector('.in-top-desc').value.trim();
-    const desperdicioKg = parseNum(tr.querySelector('.in-top-kg').value);
-    const desperdicioPct = parseNum(tr.querySelector('.in-top-pct').value);
+  const topDesperdicio = Array.from(document.querySelectorAll('#tableInputTop tbody tr')).map(tr => {
+    const inputs = tr.querySelectorAll('input');
+    return {
+      linea: inputs[0].value || 'General',
+      codigo: inputs[1].value || 'S/C',
+      producto: inputs[2].value || 'Producto',
+      desperdicioKg: parseFloat(inputs[3].value) || 0,
+      desperdicioPct: parseFloat(inputs[4].value) || 0
+    };
+  });
 
-    if (!linea && !descripcion) return;
+  const metas = Array.from(document.querySelectorAll('#tableInputMetas tbody tr')).map(tr => {
+    const inputs = tr.querySelectorAll('input');
+    const select = tr.querySelector('select');
+    return {
+      indicador: inputs[0].value || 'KPI',
+      actual: inputs[1].value || '0',
+      meta: inputs[2].value || '0',
+      estado: select.value
+    };
+  });
 
-    topDesperdicio.push({ linea, codigo, descripcion, desperdicioKg, desperdicioPct });
+  const acciones = Array.from(document.querySelectorAll('#tableInputAcciones tbody tr')).map(tr => {
+    const inputs = tr.querySelectorAll('input');
+    return {
+      area: inputs[0].value || 'General',
+      accion: inputs[1].value || ''
+    };
+  });
 
-    if (linea && desperdicioKg !== null) {
-      desperdicioPorLinea[linea] = (desperdicioPorLinea[linea] || 0) + desperdicioKg;
+  renderizarReporte({ lectura, lineas, topDesperdicio, metas, acciones });
+}
+
+// ==========================================
+// 3. RENDERIZADO DEL INFORME Y GRÁFICOS
+// ==========================================
+function renderizarReporte(datos) {
+  datosInformeActual = datos;
+  document.getElementById('report').classList.remove('hidden');
+
+  // Fecha actual
+  document.getElementById('fecha').textContent = `Fecha de emisión: ${new Date().toLocaleDateString('es-CO')}`;
+
+  // Lectura Ejecutiva
+  document.getElementById('lecturaTexto').textContent = datos.lectura;
+
+  // Llenar Filtro de Líneas
+  const filtroSelect = document.getElementById('filtroLinea');
+  filtroSelect.innerHTML = '<option value="TODAS">-- Todas las Líneas --</option>';
+  const lineasUnicas = [...new Set(datos.lineas.map(l => l.linea))];
+  lineasUnicas.forEach(l => {
+    const opt = document.createElement('option');
+    opt.value = l;
+    opt.textContent = l;
+    filtroSelect.appendChild(opt);
+  });
+
+  // Renderizar secciones
+  poblarTablaMetas(datos.metas);
+  poblarTablaYGraficoLineas(datos.lineas);
+  poblarTablaYGraficosDesperdicio(datos.topDesperdicio);
+  poblarAcciones(datos.acciones);
+
+  // Desplazar vista hacia el reporte
+  document.getElementById('report').scrollIntoView({ behavior: 'smooth' });
+}
+
+function poblarTablaMetas(metas) {
+  const tbody = document.querySelector('#tablaCumplimiento tbody');
+  tbody.innerHTML = '';
+  metas.forEach(m => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${m.indicador}</td>
+      <td>${m.actual}</td>
+      <td>${m.meta}</td>
+      <td><strong>${m.estado}</strong></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function poblarTablaYGraficoLineas(lineas) {
+  const tbody = document.querySelector('#tablaLineas tbody');
+  tbody.innerHTML = '';
+
+  const labels = [];
+  const capData = [];
+  const oee2Data = [];
+
+  lineas.forEach(l => {
+    labels.push(l.linea);
+    capData.push(l.capUtilizada);
+    oee2Data.push(l.oee2);
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${l.linea}</td>
+      <td>${l.capUtilizada}%</td>
+      <td>${l.oee1}%</td>
+      <td>${l.oee2}%</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // Renderizar Gráfico
+  const ctx = document.getElementById('chartLineas').getContext('2d');
+  if (chartLineasInstance) chartLineasInstance.destroy();
+
+  chartLineasInstance = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        { label: 'Capacidad Utilizada (%)', data: capData, backgroundColor: '#0284c7' },
+        { label: 'OEE2 (%)', data: oee2Data, backgroundColor: '#16a34a' }
+      ]
+    },
+    options: {
+      responsive: true,
+      scales: { y: { beginAtZero: true, max: 100 } }
     }
   });
-
-  // Lectura de Metas
-  const cumplimiento = [];
-  document.querySelectorAll('#tableInputMetas tbody tr').forEach((tr) => {
-    const kpi = tr.querySelector('.in-meta-kpi').value.trim();
-    if (!kpi) return;
-    cumplimiento.push({
-      kpi,
-      actual: tr.querySelector('.in-meta-actual').value.trim(),
-      meta: tr.querySelector('.in-meta-meta').value.trim(),
-      estado: tr.querySelector('.in-meta-estado').value.trim(),
-    });
-  });
-
-  // Lectura de Acciones
-  const acciones = [];
-  document.querySelectorAll('#tableInputAcciones tbody tr').forEach((tr) => {
-    const area = tr.querySelector('.in-acc-area').value.trim();
-    const accion = tr.querySelector('.in-acc-accion').value.trim();
-    if (!area || !accion) return;
-    acciones.push({ area, accion });
-  });
-
-  // Estructurar reporte global
-  globalReport = {
-    generadoEn: new Date().toISOString(),
-    modo: 'manual',
-    lecturaEjecutiva: lecturaEjecutiva || 'Informe generado mediante captura manual de datos.',
-    cumplimiento,
-    kpisPorLinea,
-    topDesperdicio,
-    desperdicioPorLinea,
-    acciones,
-  };
-
-  document.getElementById('status').innerText = '✅ Reporte generado exitosamente con tus datos manuales.';
-  poblarFiltroLineas(globalReport.kpisPorLinea);
-  renderReport(globalReport);
 }
 
-// ---------- 4. Cargar desde Archivo Excel ----------
-async function uploadFile() {
-  const fileInput = document.getElementById('fileInput');
-  const status = document.getElementById('status');
-  if (!fileInput.files.length) return alert('Selecciona un archivo Excel');
+function poblarTablaYGraficosDesperdicio(top) {
+  const tbody = document.querySelector('#tablaTop tbody');
+  tbody.innerHTML = '';
 
-  const formData = new FormData();
-  formData.append('excel', fileInput.files[0]);
-  status.innerText = 'Procesando Excel...';
+  const labels = [];
+  const kgData = [];
+  const lineaTotales = {};
 
-  try {
-    const res = await fetch('/api/upload', { method: 'POST', body: formData });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error);
+  top.forEach((item, index) => {
+    labels.push(item.producto);
+    kgData.push(item.desperdicioKg);
 
-    globalReport = data.report;
-    status.innerText = '✅ Informe generado desde Excel';
-    poblarFiltroLineas(globalReport.kpisPorLinea);
-    renderReport(globalReport);
-  } catch (err) {
-    status.innerText = '❌ Error: ' + err.message;
-  }
-}
+    // Acumular desperdicio por línea para el gráfico circular
+    lineaTotales[item.linea] = (lineaTotales[item.linea] || 0) + item.desperdicioKg;
 
-// ---------- 5. Renderizar Filtros y Reporte Final ----------
-function poblarFiltroLineas(lineas) {
-  const select = document.getElementById('filtroLinea');
-  select.innerHTML = '<option value="TODAS">-- Todas las Líneas --</option>';
-  if (!lineas) return;
-  lineas.forEach((l) => {
-    const opt = document.createElement('option');
-    opt.value = l.linea;
-    opt.textContent = l.linea;
-    select.appendChild(opt);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${index + 1}</td>
+      <td>${item.linea}</td>
+      <td>${item.codigo}</td>
+      <td>${item.producto}</td>
+      <td>${item.desperdicioKg} kg</td>
+      <td>${item.desperdicioPct}%</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // Gráfico 1: Top Productos (Barras Horizontales)
+  const ctx1 = document.getElementById('chartDesperdicio').getContext('2d');
+  if (chartDesperdicioInstance) chartDesperdicioInstance.destroy();
+
+  chartDesperdicioInstance = new Chart(ctx1, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{ label: 'Desperdicio (kg)', data: kgData, backgroundColor: '#dc2626' }]
+    },
+    options: { indexAxis: 'y', responsive: true }
+  });
+
+  // Gráfico 2: Desperdicio por Línea (Pie Chart)
+  const ctx2 = document.getElementById('chartPorLinea').getContext('2d');
+  if (chartPorLineaInstance) chartPorLineaInstance.destroy();
+
+  chartPorLineaInstance = new Chart(ctx2, {
+    type: 'pie',
+    data: {
+      labels: Object.keys(lineaTotales),
+      datasets: [{
+        data: Object.values(lineaTotales),
+        backgroundColor: ['#f87171', '#fbbf24', '#60a5fa', '#34d399', '#a78bfa']
+      }]
+    },
+    options: { responsive: true }
   });
 }
 
+function poblarAcciones(acciones) {
+  const lista = document.getElementById('listaAcciones');
+  lista.innerHTML = '';
+  acciones.forEach(a => {
+    const li = document.createElement('li');
+    li.innerHTML = `<strong>[${a.area}]</strong> ${a.accion}`;
+    lista.appendChild(li);
+  });
+}
+
+// ==========================================
+// 4. FILTRADO DINÁMICO
+// ==========================================
 function aplicarFiltroLinea() {
-  if (!globalReport) return;
-  const lineaSeleccionada = document.getElementById('filtroLinea').value;
+  if (!datosInformeActual) return;
+  const seleccion = document.getElementById('filtroLinea').value;
 
-  if (lineaSeleccionada === 'TODAS') {
-    renderReport(globalReport);
+  if (seleccion === 'TODAS') {
+    poblarTablaYGraficoLineas(datosInformeActual.lineas);
+    poblarTablaYGraficosDesperdicio(datosInformeActual.topDesperdicio);
   } else {
-    const reportFiltrado = {
-      ...globalReport,
-      kpisPorLinea: (globalReport.kpisPorLinea || []).filter((l) => l.linea === lineaSeleccionada),
-      topDesperdicio: (globalReport.topDesperdicio || []).filter((p) => p.linea === lineaSeleccionada),
-    };
-    renderReport(reportFiltrado);
-  }
-}
+    const lineasFiltradas = datosInformeActual.lineas.filter(l => l.linea === seleccion);
+    const topFiltrado = datosInformeActual.topDesperdicio.filter(t => t.linea === seleccion);
 
-function renderReport(report) {
-  if (!report) return;
-  document.getElementById('report').classList.remove('hidden');
-  document.getElementById('fecha').innerText = `Fecha de Generación: ${new Date(report.generadoEn).toLocaleString()}`;
-
-  // Lectura ejecutiva
-  document.getElementById('lecturaTexto').innerText = report.lecturaEjecutiva || 'Sin lectura registrada.';
-
-  // Tabla Cumplimiento
-  const tbodyCumplimiento = document.querySelector('#tablaCumplimiento tbody');
-  tbodyCumplimiento.innerHTML = '';
-  (report.cumplimiento || []).forEach((row) => {
-    tbodyCumplimiento.innerHTML += `
-      <tr>
-        <td>${formatVal(row.kpi)}</td>
-        <td>${formatPct(row.actual)}</td>
-        <td>${formatPct(row.meta)}</td>
-        <td>${formatVal(row.estado)}</td>
-      </tr>
-    `;
-  });
-
-  // Tabla Líneas OEE
-  const tbodyLineas = document.querySelector('#tablaLineas tbody');
-  tbodyLineas.innerHTML = '';
-  (report.kpisPorLinea || []).forEach((row) => {
-    tbodyLineas.innerHTML += `
-      <tr>
-        <td>${formatVal(row.linea)}</td>
-        <td>${formatPct(row.capacidadUtilizada)}</td>
-        <td>${formatPct(row.oee1)}</td>
-        <td>${formatPct(row.oee2)}</td>
-      </tr>
-    `;
-  });
-
-  // Tabla Top Desperdicio
-  const tbodyTop = document.querySelector('#tablaTop tbody');
-  tbodyTop.innerHTML = '';
-  (report.topDesperdicio || []).forEach((row, idx) => {
-    tbodyTop.innerHTML += `
-      <tr>
-        <td>${idx + 1}</td>
-        <td>${formatVal(row.linea)}</td>
-        <td>${formatVal(row.codigo)}</td>
-        <td>${formatVal(row.descripcion)}</td>
-        <td>${formatVal(row.desperdicioKg)} kg</td>
-        <td>${formatPct(row.desperdicioPct)}</td>
-      </tr>
-    `;
-  });
-
-  // Acciones prioritarias
-  const listaAcciones = document.getElementById('listaAcciones');
-  listaAcciones.innerHTML = '';
-  (report.acciones || []).forEach((acc) => {
-    listaAcciones.innerHTML += `<li><strong>${formatVal(acc.area)}:</strong> ${formatVal(acc.accion)}</li>`;
-  });
-
-  // Renderizar Gráficos con Chart.js
-  renderCharts(report);
-}
-
-function renderCharts(report) {
-  if (typeof Chart === 'undefined') return;
-
-  if (chartInstanceLineas) chartInstanceLineas.destroy();
-  if (chartInstanceDesperdicio) chartInstanceDesperdicio.destroy();
-  if (chartInstancePorLinea) chartInstancePorLinea.destroy();
-
-  // Gráfico 1: OEE2 y Capacidad
-  const ctxLineas = document.getElementById('chartLineas');
-  if (ctxLineas && report.kpisPorLinea && report.kpisPorLinea.length > 0) {
-    chartInstanceLineas = new Chart(ctxLineas, {
-      type: 'bar',
-      data: {
-        labels: report.kpisPorLinea.map((l) => l.linea),
-        datasets: [
-          {
-            label: 'Capacidad Utilizada (%)',
-            data: report.kpisPorLinea.map((l) => (l.capacidadUtilizada <= 1 ? l.capacidadUtilizada * 100 : l.capacidadUtilizada)),
-            backgroundColor: '#0284c7',
-          },
-          {
-            label: 'OEE2 (%)',
-            data: report.kpisPorLinea.map((l) => (l.oee2 <= 1 ? l.oee2 * 100 : l.oee2)),
-            backgroundColor: '#16a34a',
-          },
-        ],
-      },
-      options: { responsive: true, scales: { y: { beginAtZero: true, max: 100 } } },
-    });
-  }
-
-  // Gráfico 2: Top Desperdicio
-  const ctxDesperdicio = document.getElementById('chartDesperdicio');
-  if (ctxDesperdicio && report.topDesperdicio && report.topDesperdicio.length > 0) {
-    chartInstanceDesperdicio = new Chart(ctxDesperdicio, {
-      type: 'bar',
-      data: {
-        labels: report.topDesperdicio.map((p) => p.descripcion || p.codigo),
-        datasets: [
-          {
-            label: 'Desperdicio (kg)',
-            data: report.topDesperdicio.map((p) => p.desperdicioKg),
-            backgroundColor: '#dc2626',
-          },
-        ],
-      },
-      options: { indexAxis: 'y', responsive: true },
-    });
-  }
-
-  // Gráfico 3: Desperdicio Por Línea
-  const ctxPorLinea = document.getElementById('chartPorLinea');
-  if (ctxPorLinea && report.desperdicioPorLinea) {
-    chartInstancePorLinea = new Chart(ctxPorLinea, {
-      type: 'pie',
-      data: {
-        labels: Object.keys(report.desperdicioPorLinea),
-        datasets: [
-          {
-            data: Object.values(report.desperdicioPorLinea),
-            backgroundColor: ['#f59e0b', '#0284c7', '#16a34a', '#8b5cf6', '#ec4899'],
-          },
-        ],
-      },
-      options: { responsive: true },
-    });
+    poblarTablaYGraficoLineas(lineasFiltradas);
+    poblarTablaYGraficosDesperdicio(topFiltrado);
   }
 }
