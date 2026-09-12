@@ -20,11 +20,9 @@ document.getElementById('addRowAccionBtn').addEventListener('click', () => addRo
 function formatPct(v) {
   if (v === null || v === undefined || v === '') return '-';
   
-  // Extraer el número limpio sin importar si viene como string con '%' o número decimal
   let num = typeof v === 'number' ? v : parseFloat(String(v).replace('%', '').replace(',', '.').trim());
   if (isNaN(num)) return String(v);
 
-  // Convertir decimales puros de Excel (ej: 0.8638 -> 86.4%)
   const val = (num > 0 && num <= 1) ? num * 100 : num;
   return val.toFixed(1) + '%';
 }
@@ -50,19 +48,20 @@ function cleanReportData(report) {
   const esIgnorable = (txt) => {
     if (!txt) return false;
     const norm = String(txt).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-    return ['total', 'totales', 'promedio', 'subtotal', 'linea de produccion', 'gran total', 'resumen'].includes(norm) || norm.startsWith('total');
+    const palabrasClave = ['total', 'totales', 'promedio', 'subtotal', 'gran total', 'resumen'];
+    return palabrasClave.includes(norm) || norm.startsWith('total ') || norm === 'total';
   };
 
-  // 1. Filtrar líneas OEE duplicadas o que sean fila de totales
+  // 1. Filtrar líneas OEE duplicadas o filas de totales
   const kpisPorLinea = (report.kpisPorLinea || []).filter((item, idx, self) => {
     if (!item || !item.linea || esIgnorable(item.linea)) return false;
     return self.findIndex(t => String(t.linea).trim().toLowerCase() === String(item.linea).trim().toLowerCase()) === idx;
   });
 
-  // 2. Filtrar productos duplicados o que sean filas de encabezado/totales
+  // 2. Filtrar productos duplicados o filas de totales
   const topDesperdicio = (report.topDesperdicio || []).filter((item, idx, self) => {
     const nombre = item.descripcion || item.producto || item.codigo;
-    if (!nombre || esIgnorable(nombre) || esIgnorable(item.linea)) return false;
+    if (!nombre || esIgnorable(nombre)) return false;
     return self.findIndex(t => (String(t.linea) + String(t.codigo) + String(nombre)).toLowerCase() === (String(item.linea) + String(item.codigo) + String(t.descripcion || t.producto)).toLowerCase()) === idx;
   });
 
@@ -90,10 +89,11 @@ function toggleManualForm() {
     form.style.display = 'block';
 
     if (document.querySelectorAll('#tableInputLineas tbody tr').length === 0) {
-      addRowLinea('Línea 1 - Pan Tajado', 85, 78, 74);
-      addRowLinea('Línea 2 - Hamburgo', 78, 72, 69);
-      addRowTop('Línea 1 - Pan Tajado', 'P001', 'Pan Blanco 500g', 120, 3.5);
-      addRowMeta('OEE2 Global', '72.5%', '75.0%', 'No Cumple');
+      addRowLinea('Pan bollería', 31.9, 27.6, 86.4);
+      addRowLinea('Panadería', 24.6, 24.1, 97.7);
+      addRowLinea('Tortillas', 49.6, 48.0, 96.9);
+      addRowTop('Pan bollería', 'P001', 'Pan Blanco 500g', 120, 3.5);
+      addRowMeta('OEE2 Global', '86.4%', '85.0%', 'Cumple');
       addRowAccion('Mantenimiento', 'Revisar calibración de máquina cortadora.');
     }
   } else {
@@ -223,7 +223,7 @@ function procesarDatosManuales() {
   renderReport(globalReport);
 }
 
-// ---------- 4. Cargar desde Archivo Excel ----------
+// ---------- 4. Cargar desde Archivo Excel (Lector Matricial 2D) ----------
 function uploadFile() {
   const fileInput = document.getElementById('fileInput');
   const status = document.getElementById('status');
@@ -248,25 +248,38 @@ function uploadFile() {
       const norm = (str) => String(str || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
       workbook.SheetNames.forEach(sheetName => {
-        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+        const sheet = workbook.Sheets[sheetName];
+        // Convertir la hoja a una matriz 2D de filas
+        const rowsMatrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
-        rows.forEach(r => {
-          const keys = Object.keys(r);
+        let currentHeaders = [];
 
-          // Helper para buscar cualquier columna que coincida parcialmente con palabras clave
-          const getVal = (candidatos) => {
-            const matchedKey = keys.find(k => {
-              const nk = norm(k);
-              return candidatos.some(c => nk.includes(c));
-            });
-            return matchedKey ? r[matchedKey] : '';
+        rowsMatrix.forEach(row => {
+          if (!Array.isArray(row) || row.length === 0) return;
+
+          const rowNorm = row.map(c => norm(c));
+
+          // Detección dinámica de nuevas filas de encabezado en hojas apiladas
+          const keywordsHeader = ['linea', 'proceso', 'equipo', 'indicador', 'kpi', 'metrica', 'producto', 'descripcion', 'articulo', 'codigo', 'sku', 'accion', 'area', 'desperdicio', 'merma'];
+          const esFilaEncabezado = rowNorm.some(cell => keywordsHeader.some(k => cell === k || cell.includes(k)));
+
+          if (esFilaEncabezado) {
+            currentHeaders = rowNorm;
+            return;
+          }
+
+          // Helper para extraer el valor de una celda basado en los encabezados activos
+          const getValByHeader = (candidatos) => {
+            if (!currentHeaders.length) return '';
+            const idx = currentHeaders.findIndex(h => candidatos.some(c => h.includes(c)));
+            return (idx !== -1 && row[idx] !== undefined) ? row[idx] : '';
           };
 
-          // 1. Líneas OEE
-          const linea = getVal(['linea', 'proceso', 'equipo', 'planta']);
-          const cap = parseNum(getVal(['capacidad', 'utilizacion', 'cap_utilizada']));
-          const oee1 = parseNum(getVal(['oee1', 'oee 1']));
-          const oee2 = parseNum(getVal(['oee2', 'oee 2']));
+          // 1. Detección de Líneas OEE
+          const linea = getValByHeader(['linea', 'proceso', 'equipo', 'planta', 'area', 'seccion']);
+          const cap = parseNum(getValByHeader(['capacidad', 'utilizacion', 'cap_utilizada', 'cap', 'util']));
+          const oee1 = parseNum(getValByHeader(['oee1', 'oee 1', 'oee_1']));
+          const oee2 = parseNum(getValByHeader(['oee2', 'oee 2', 'oee_2', 'oee']));
 
           if (linea && (cap !== null || oee1 !== null || oee2 !== null)) {
             kpisPorLinea.push({
@@ -277,11 +290,11 @@ function uploadFile() {
             });
           }
 
-          // 2. Top Desperdicio
-          const prod = getVal(['producto', 'descripcion', 'articulo', 'item', 'nombre']);
-          const cod = getVal(['codigo', 'sku', 'ref', 'cod']);
-          const kg = parseNum(getVal(['desperdicio', 'kg', 'merma', 'scrap', 'perdida']));
-          const pct = parseNum(['pct', 'porcentaje', '%']);
+          // 2. Detección de Top Desperdicio
+          const prod = getValByHeader(['producto', 'descripcion', 'articulo', 'item', 'nombre', 'material']);
+          const cod = getValByHeader(['codigo', 'sku', 'ref', 'cod', 'sap', 'id']);
+          const kg = parseNum(getValByHeader(['desperdicio', 'kg', 'merma', 'scrap', 'perdida', 'mermas', 'cantidad', 'peso']));
+          const pct = parseNum(getValByHeader(['pct', 'porcentaje', '%', 'porcentual']));
 
           if (prod && kg !== null && kg > 0) {
             topDesperdicio.push({
@@ -294,11 +307,11 @@ function uploadFile() {
             });
           }
 
-          // 3. Metas / Cumplimiento
-          const kpiNom = getVal(['indicador', 'kpi', 'metrica', 'meta']);
-          const valActual = getVal(['actual', 'real', 'ejecutado']);
-          const valMeta = getVal(['meta', 'objetivo', 'target']);
-          const valEstado = getVal(['estado', 'cumplimiento', 'status']);
+          // 3. Detección de Cumplimiento de Metas
+          const kpiNom = getValByHeader(['indicador', 'kpi', 'metrica', 'meta', 'objetivo', 'medida', 'concepto']);
+          const valActual = getValByHeader(['actual', 'real', 'ejecutado', 'resultado', 'valor']);
+          const valMeta = getValByHeader(['meta', 'objetivo', 'target', 'plan', 'esperado']);
+          const valEstado = getValByHeader(['estado', 'cumplimiento', 'status', 'cumple', 'condicion']);
 
           if (kpiNom && (valActual !== '' || valMeta !== '' || valEstado !== '')) {
             cumplimiento.push({
@@ -309,9 +322,9 @@ function uploadFile() {
             });
           }
 
-          // 4. Acciones Prioritarias
-          const accionTexto = getVal(['accion', 'tarea', 'actividad', 'recomendacion']);
-          const areaTexto = getVal(['area', 'departamento', 'responsable']);
+          // 4. Detección de Acciones Prioritarias
+          const accionTexto = getValByHeader(['accion', 'tarea', 'actividad', 'recomendacion', 'plan', 'mejora', 'hallazgo']);
+          const areaTexto = getValByHeader(['area', 'departamento', 'responsable', 'encargado']);
 
           if (accionTexto && String(accionTexto).trim() !== '') {
             acciones.push({
@@ -500,7 +513,7 @@ function renderCharts(report) {
 
   // Gráfico 3: Desperdicio Por Línea
   const ctxPorLinea = document.getElementById('chartPorLinea');
-  if (ctxPorLinea && report.desperdicioPorLinea) {
+  if (ctxPorLinea && report.desperdicioPorLinea && Object.keys(report.desperdicioPorLinea).length > 0) {
     chartInstancePorLinea = new Chart(ctxPorLinea, {
       type: 'pie',
       data: {
@@ -508,7 +521,7 @@ function renderCharts(report) {
         datasets: [
           {
             data: Object.values(report.desperdicioPorLinea),
-            backgroundColor: ['#f59e0b', '#0284c7', '#16a34a', '#8b5cf6', '#ec4899'],
+            backgroundColor: ['#f59e0b', '#0284c7', '#16a34a', '#8b5cf6', '#ec4899', '#ef4444', '#14b8a6'],
           },
         ],
       },
